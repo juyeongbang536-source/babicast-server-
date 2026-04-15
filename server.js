@@ -5,6 +5,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 
 const app = express();
 app.use(cors({ origin: '*' }));
@@ -126,5 +127,171 @@ app.post('/create-video', async (req, res) => {
   }
 });
 
+/* ── 쿠팡 파트너스: 상품 검색 ── */
+app.post('/coupang-search', async (req, res) => {
+  try {
+    const { keyword, categoryId, limit = 10, accessKey, secretKey, trackingId } = req.body;
+    if (!accessKey || !secretKey) return res.status(400).json({ error: 'API 키 없음' });
+
+    const method = 'GET';
+    const path2 = '/v2/providers/affiliate_open_api/apis/openapi/products/search';
+    let qs = `keyword=${encodeURIComponent(keyword)}&limit=${limit}`;
+    if (categoryId && categoryId !== '0') qs += `&categoryId=${categoryId}`;
+
+    const datetime = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const message = `${datetime}\n${method}\n${path2}\n${qs}\n`;
+    const sig = crypto.createHmac('sha256', secretKey).update(message).digest('hex');
+
+    const apiRes = await axios.get(`https://api-gateway.coupang.com${path2}?${qs}`, {
+      headers: {
+        'Content-Type': 'application/json;charset=UTF-8',
+        Authorization: `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${sig}`,
+      }
+    });
+    res.json(apiRes.data);
+  } catch (e) {
+    const msg = e.response?.data?.message || e.message;
+    res.status(500).json({ error: msg });
+  }
+});
+
+/* ── 쿠팡 파트너스: 링크 자동 생성 ── */
+app.post('/coupang-link', async (req, res) => {
+  try {
+    const { coupangUrl, accessKey, secretKey, trackingId = 'default' } = req.body;
+    if (!accessKey || !secretKey) return res.status(400).json({ error: 'API 키 없음' });
+
+    const method = 'GET';
+    const path2 = '/v2/providers/affiliate_open_api/apis/openapi/products/links';
+    const qs = `coupangUrls=${encodeURIComponent(coupangUrl)}&subId=${trackingId}`;
+
+    const datetime = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const message = `${datetime}\n${method}\n${path2}\n${qs}\n`;
+    const sig = crypto.createHmac('sha256', secretKey).update(message).digest('hex');
+
+    const apiRes = await axios.get(`https://api-gateway.coupang.com${path2}?${qs}`, {
+      headers: {
+        'Content-Type': 'application/json;charset=UTF-8',
+        Authorization: `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${sig}`,
+      }
+    });
+    const item = Array.isArray(apiRes.data.data) ? apiRes.data.data[0] : apiRes.data.data;
+    res.json({ shortenUrl: item?.shortenUrl || item?.landingUrl || coupangUrl });
+  } catch (e) {
+    const msg = e.response?.data?.message || e.message;
+    res.status(500).json({ error: msg });
+  }
+});
+
 const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log(`BABI CAST 서버 포트 ${PORT} 실행 중`));
+
+
+const app = express();
+const PORT = process.env.PORT || 8080;
+
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+
+app.get('/', (req, res) => res.send('BABI CAST 서버 포트 ' + PORT + ' 실행 중'));
+
+/* ───────────────────────────────────────────
+   기존: 영상 생성
+─────────────────────────────────────────── */
+app.post('/create-video', async (req, res) => {
+  try {
+    const { topic, category, claudeKey, pexelsKey, openaiKey, voice, scriptData } = req.body;
+
+    // 1) 대본 슬라이드
+    const slides = scriptData?.slides || [];
+
+    // 2) Pexels 영상 클립 검색
+    const pexelsRes = await fetch(
+      `https://api.pexels.com/videos/search?query=${encodeURIComponent(topic)}&per_page=${slides.length}&orientation=portrait`,
+      { headers: { Authorization: pexelsKey } }
+    );
+    const pexelsData = await pexelsRes.json();
+    const videoUrls = (pexelsData.videos || []).map(v => {
+      const file = v.video_files.find(f => f.quality === 'hd' && f.width <= 1080) || v.video_files[0];
+      return file?.link;
+    }).filter(Boolean);
+
+    // 응답 (클라이언트에서 처리)
+    res.json({ slides, videoUrls, title: scriptData?.title || topic });
+  } catch (e) {
+    console.error('/create-video error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ───────────────────────────────────────────
+   쿠팡 파트너스: 상품 검색
+─────────────────────────────────────────── */
+app.post('/coupang-search', async (req, res) => {
+  try {
+    const { keyword, categoryId, limit = 10, accessKey, secretKey, trackingId } = req.body;
+    if (!accessKey || !secretKey) return res.status(400).json({ error: 'API 키 없음' });
+
+    const method = 'GET';
+    const path = '/v2/providers/affiliate_open_api/apis/openapi/products/search';
+    let qs = `keyword=${encodeURIComponent(keyword)}&limit=${limit}`;
+    if (categoryId && categoryId !== '0') qs += `&categoryId=${categoryId}`;
+
+    const datetime = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const message = `${datetime}\n${method}\n${path}\n${qs}\n`;
+    const sig = crypto.createHmac('sha256', secretKey).update(message).digest('hex');
+
+    const apiRes = await fetch(
+      `https://api-gateway.coupang.com${path}?${qs}`,
+      {
+        headers: {
+          'Content-Type': 'application/json;charset=UTF-8',
+          Authorization: `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${sig}`,
+        }
+      }
+    );
+    const data = await apiRes.json();
+    if (!apiRes.ok) return res.status(apiRes.status).json({ error: data.message || '쿠팡 API 오류' });
+    res.json(data);
+  } catch (e) {
+    console.error('/coupang-search error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ───────────────────────────────────────────
+   쿠팡 파트너스: 파트너스 링크 자동 생성
+─────────────────────────────────────────── */
+app.post('/coupang-link', async (req, res) => {
+  try {
+    const { coupangUrl, accessKey, secretKey, trackingId = 'default' } = req.body;
+    if (!accessKey || !secretKey) return res.status(400).json({ error: 'API 키 없음' });
+
+    const method = 'GET';
+    const path = '/v2/providers/affiliate_open_api/apis/openapi/products/links';
+    const qs = `coupangUrls=${encodeURIComponent(coupangUrl)}&subId=${trackingId}`;
+
+    const datetime = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const message = `${datetime}\n${method}\n${path}\n${qs}\n`;
+    const sig = crypto.createHmac('sha256', secretKey).update(message).digest('hex');
+
+    const apiRes = await fetch(
+      `https://api-gateway.coupang.com${path}?${qs}`,
+      {
+        headers: {
+          'Content-Type': 'application/json;charset=UTF-8',
+          Authorization: `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${sig}`,
+        }
+      }
+    );
+    const data = await apiRes.json();
+    if (!apiRes.ok) return res.status(apiRes.status).json({ error: data.message || '링크 생성 오류' });
+    const item = Array.isArray(data.data) ? data.data[0] : data.data;
+    res.json({ shortenUrl: item?.shortenUrl || item?.landingUrl || coupangUrl });
+  } catch (e) {
+    console.error('/coupang-link error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, () => console.log(`BABI CAST 서버 포트 ${PORT} 실행 중`));
