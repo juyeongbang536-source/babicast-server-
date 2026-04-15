@@ -1,5 +1,5 @@
 {
-  "name": "babicast-server",
+  "name": "바비캐스트 서버",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
@@ -10,6 +10,7 @@
     "cors": "^2.8.5",
     "axios": "^1.6.0",
     "fluent-ffmpeg": "^2.1.2",
-    "uuid": "^9.0.0"
+    "uuid": "^9.0.0",
+    "cheerio": "^1.0.0"
   }
 }
