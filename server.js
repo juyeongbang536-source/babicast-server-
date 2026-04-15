@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
+const cheerio = require('cheerio');
 
 const app = express();
 app.use(cors({ origin: '*' }));
@@ -16,6 +17,107 @@ if (!fs.existsSync(TMP)) fs.mkdirSync(TMP, { recursive: true });
 
 app.get('/', (req, res) => res.json({ status: 'BABI CAST 서버 작동중' }));
 
+/* ── 쿠팡 직접 검색 (스크래핑) ── */
+app.post('/coupang-scrape', async (req, res) => {
+  try {
+    const { keyword } = req.body;
+    if (!keyword) return res.status(400).json({ error: '검색어 없음' });
+
+    const url = `https://www.coupang.com/np/search?q=${encodeURIComponent(keyword)}&channel=user&sorter=scoreDesc&listSize=20`;
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Referer': 'https://www.coupang.com',
+        'Cookie': 'PCID=; sid=; x-coupang-origin-region=KOREA;',
+      },
+      timeout: 10000,
+    });
+
+    const $ = cheerio.load(response.data);
+    const products = [];
+
+    $('li.search-product').each((i, el) => {
+      if (i >= 10) return false;
+      const name = $(el).find('.name').text().trim() || $(el).find('.product-name').text().trim();
+      const price = $(el).find('.price-value').text().trim() || $(el).find('.normal-price').text().trim();
+      const img = $(el).find('img.product-image').attr('src') || $(el).find('img').first().attr('src') || '';
+      const href = $(el).find('a.search-product-link').attr('href') || $(el).find('a').first().attr('href') || '';
+      const productUrl = href.startsWith('http') ? href : 'https://www.coupang.com' + href;
+      const isRocket = $(el).find('.badge-rocket').length > 0 || $(el).find('[class*="rocket"]').length > 0;
+      const rating = $(el).find('.rating').text().trim();
+
+      if (name && price) {
+        products.push({ name, price: price + '원', img, productUrl, isRocket, rating });
+      }
+    });
+
+    if (!products.length) {
+      // 파싱 실패시 대체 셀렉터 시도
+      $('[data-product-id]').each((i, el) => {
+        if (i >= 10) return false;
+        const name = $(el).find('[class*="name"]').first().text().trim();
+        const price = $(el).find('[class*="price"]').first().text().trim();
+        const img = $(el).find('img').first().attr('src') || '';
+        const href = $(el).find('a').first().attr('href') || '';
+        const productUrl = href.startsWith('http') ? href : 'https://www.coupang.com' + href;
+        if (name) products.push({ name, price, img, productUrl, isRocket: false, rating: '' });
+      });
+    }
+
+    res.json({ products });
+  } catch (e) {
+    console.error('/coupang-scrape error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ── 쿠팡 파트너스: 상품 검색 (API) ── */
+app.post('/coupang-search', async (req, res) => {
+  try {
+    const { keyword, categoryId, limit = 10, accessKey, secretKey } = req.body;
+    if (!accessKey || !secretKey) return res.status(400).json({ error: 'API 키 없음' });
+    const method = 'GET';
+    const apiPath = '/v2/providers/affiliate_open_api/apis/openapi/products/search';
+    let qs = `keyword=${encodeURIComponent(keyword)}&limit=${limit}`;
+    if (categoryId && categoryId !== '0') qs += `&categoryId=${categoryId}`;
+    const datetime = new Date().toISOString().replace(/[-:T]/g,'').slice(0,14);
+    const sig = crypto.createHmac('sha256', secretKey).update(`${datetime}\n${method}\n${apiPath}\n${qs}\n`).digest('hex');
+    const apiRes = await axios.get(`https://api-gateway.coupang.com${apiPath}?${qs}`, {
+      headers: { 'Content-Type': 'application/json;charset=UTF-8',
+        Authorization: `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${sig}` }
+    });
+    res.json(apiRes.data);
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data?.message || e.message });
+  }
+});
+
+/* ── 쿠팡 파트너스: 링크 자동 생성 ── */
+app.post('/coupang-link', async (req, res) => {
+  try {
+    const { coupangUrl, accessKey, secretKey, trackingId = 'default' } = req.body;
+    if (!accessKey || !secretKey) return res.status(400).json({ error: 'API 키 없음' });
+    const method = 'GET';
+    const apiPath = '/v2/providers/affiliate_open_api/apis/openapi/products/links';
+    const qs = `coupangUrls=${encodeURIComponent(coupangUrl)}&subId=${trackingId}`;
+    const datetime = new Date().toISOString().replace(/[-:T]/g,'').slice(0,14);
+    const sig = crypto.createHmac('sha256', secretKey).update(`${datetime}\n${method}\n${apiPath}\n${qs}\n`).digest('hex');
+    const apiRes = await axios.get(`https://api-gateway.coupang.com${apiPath}?${qs}`, {
+      headers: { 'Content-Type': 'application/json;charset=UTF-8',
+        Authorization: `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${sig}` }
+    });
+    const item = Array.isArray(apiRes.data.data) ? apiRes.data.data[0] : apiRes.data.data;
+    res.json({ shortenUrl: item?.shortenUrl || item?.landingUrl || coupangUrl });
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data?.message || e.message });
+  }
+});
+
+/* ── 영상 생성 ── */
 app.post('/create-video', async (req, res) => {
   const { topic, category, claudeKey, pexelsKey, openaiKey, voice } = req.body;
   const jobId = uuidv4();
@@ -111,46 +213,6 @@ app.post('/create-video', async (req, res) => {
     console.error(e.message);
     if (!res.headersSent) res.status(500).json({ error: e.message });
     try { fs.rmSync(jobDir, { recursive: true, force: true }); } catch(e2) {}
-  }
-});
-
-app.post('/coupang-search', async (req, res) => {
-  try {
-    const { keyword, categoryId, limit = 10, accessKey, secretKey } = req.body;
-    if (!accessKey || !secretKey) return res.status(400).json({ error: 'API 키 없음' });
-    const method = 'GET';
-    const apiPath = '/v2/providers/affiliate_open_api/apis/openapi/products/search';
-    let qs = `keyword=${encodeURIComponent(keyword)}&limit=${limit}`;
-    if (categoryId && categoryId !== '0') qs += `&categoryId=${categoryId}`;
-    const datetime = new Date().toISOString().replace(/[-:T]/g,'').slice(0,14);
-    const sig = crypto.createHmac('sha256', secretKey).update(`${datetime}\n${method}\n${apiPath}\n${qs}\n`).digest('hex');
-    const apiRes = await axios.get(`https://api-gateway.coupang.com${apiPath}?${qs}`, {
-      headers: { 'Content-Type': 'application/json;charset=UTF-8',
-        Authorization: `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${sig}` }
-    });
-    res.json(apiRes.data);
-  } catch (e) {
-    res.status(500).json({ error: e.response?.data?.message || e.message });
-  }
-});
-
-app.post('/coupang-link', async (req, res) => {
-  try {
-    const { coupangUrl, accessKey, secretKey, trackingId = 'default' } = req.body;
-    if (!accessKey || !secretKey) return res.status(400).json({ error: 'API 키 없음' });
-    const method = 'GET';
-    const apiPath = '/v2/providers/affiliate_open_api/apis/openapi/products/links';
-    const qs = `coupangUrls=${encodeURIComponent(coupangUrl)}&subId=${trackingId}`;
-    const datetime = new Date().toISOString().replace(/[-:T]/g,'').slice(0,14);
-    const sig = crypto.createHmac('sha256', secretKey).update(`${datetime}\n${method}\n${apiPath}\n${qs}\n`).digest('hex');
-    const apiRes = await axios.get(`https://api-gateway.coupang.com${apiPath}?${qs}`, {
-      headers: { 'Content-Type': 'application/json;charset=UTF-8',
-        Authorization: `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${sig}` }
-    });
-    const item = Array.isArray(apiRes.data.data) ? apiRes.data.data[0] : apiRes.data.data;
-    res.json({ shortenUrl: item?.shortenUrl || item?.landingUrl || coupangUrl });
-  } catch (e) {
-    res.status(500).json({ error: e.response?.data?.message || e.message });
   }
 });
 
