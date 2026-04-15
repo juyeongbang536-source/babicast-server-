@@ -127,7 +127,7 @@ app.post('/create-video', async (req, res) => {
     const scriptRes = await axios.post('https://api.anthropic.com/v1/messages', {
       model: 'claude-sonnet-4-20250514', max_tokens: 2000,
       system: '한국 SNS 숏폼 대본 전문가. JSON만 응답.',
-      messages: [{ role: 'user', content: `주제: ${topic}\n카테고리: ${category}\nJSON: {"title":"제목","keywords":["키워드1","키워드2"],"slides":[{"caption":"핵심한줄","text":"나레이션"}]}` }]
+      messages: [{ role: 'user', content: `주제: ${topic}\n카테고리: ${category}\nJSON: {"title":"제목","keywords":["english keyword1","english keyword2"],"slides":[{"caption":"핵심한줄(10자이내)","text":"나레이션"}]}\n키워드는 반드시 Pexels 검색용 영어로 작성` }]
     }, { headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01' } });
     const scriptText = scriptRes.data.content.filter(b => b.type === 'text').map(b => b.text).join('');
     const scriptData = JSON.parse(scriptText.match(/\{[\s\S]*\}/)[0]);
@@ -182,8 +182,8 @@ app.post('/create-video', async (req, res) => {
           .videoFilters([
             'scale=1080:1920:force_original_aspect_ratio=increase','crop=1080:1920',
             'drawbox=x=0:y=0:w=iw:h=ih:color=black@0.45:t=fill',
-            `drawtext=text='${caption}':fontsize=72:fontcolor=white:x=(w-text_w)/2:y=350:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:shadowcolor=black:shadowx=3:shadowy=3`,
-            `drawtext=text='${sub}':fontsize=38:fontcolor=white@0.85:x=60:y=h-200:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:shadowcolor=black:shadowx=2:shadowy=2`,
+            `drawtext=text='${caption}':fontsize=72:fontcolor=white:x=(w-text_w)/2:y=350:fontfile=/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf:shadowcolor=black:shadowx=3:shadowy=3`,
+            `drawtext=text='${sub}':fontsize=38:fontcolor=white@0.85:x=60:y=h-200:fontfile=/usr/share/fonts/truetype/nanum/NanumGothic.ttf:shadowcolor=black:shadowx=2:shadowy=2`,
           ])
           .videoCodec('libx264').audioCodec('aac')
           .outputOptions(['-preset ultrafast','-crf 28','-pix_fmt yuv420p'])
