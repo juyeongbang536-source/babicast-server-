@@ -216,5 +216,29 @@ app.post('/create-video', async (req, res) => {
   }
 });
 
+/* ── 네이버 쇼핑인사이트 ── */
+app.post('/naver-shopping-trend', async (req, res) => {
+  try {
+    const { startDate, endDate, categoryId } = req.body;
+    const clientId = process.env.NAVER_CLIENT_ID;
+    const clientSecret = process.env.NAVER_CLIENT_SECRET;
+    if (!clientId || !clientSecret) return res.status(400).json({ error: '네이버 API 키 없음' });
+
+    const apiRes = await axios.post('https://openapi.naver.com/v1/datalab/shopping/category/keywords', {
+      startDate, endDate, timeUnit: 'date',
+      category: categoryId, keyword: [], device: '', gender: '', ages: []
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Naver-Client-Id': clientId,
+        'X-Naver-Client-Secret': clientSecret,
+      }
+    });
+    res.json(apiRes.data);
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data?.message || e.message });
+  }
+});
+
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`BABI CAST 서버 포트 ${PORT} 실행 중`));
