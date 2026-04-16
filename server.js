@@ -219,14 +219,15 @@ app.post('/create-video', async (req, res) => {
 /* ── 네이버 쇼핑인사이트 ── */
 app.post('/naver-shopping-trend', async (req, res) => {
   try {
-    const { startDate, endDate, categoryId } = req.body;
+    const { startDate, endDate, categoryId, categoryName } = req.body;
     const clientId = process.env.NAVER_CLIENT_ID;
     const clientSecret = process.env.NAVER_CLIENT_SECRET;
     if (!clientId || !clientSecret) return res.status(400).json({ error: '네이버 API 키 없음' });
 
-    const apiRes = await axios.post('https://openapi.naver.com/v1/datalab/shopping/category/keywords', {
-      startDate, endDate, timeUnit: 'date',
-      category: categoryId, keyword: [], device: '', gender: '', ages: []
+    const apiRes = await axios.post('https://openapi.naver.com/v1/datalab/shopping/categories', {
+      startDate, endDate, timeUnit: 'week',
+      category: [{ name: categoryName || '생활용품', param: [categoryId || '50000167'] }],
+      device: '', gender: '', ages: []
     }, {
       headers: {
         'Content-Type': 'application/json',
@@ -236,6 +237,7 @@ app.post('/naver-shopping-trend', async (req, res) => {
     });
     res.json(apiRes.data);
   } catch (e) {
+    console.error('naver error:', e.response?.data || e.message);
     res.status(500).json({ error: e.response?.data?.message || e.message });
   }
 });
